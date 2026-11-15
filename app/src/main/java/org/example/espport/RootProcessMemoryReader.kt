@@ -66,7 +66,7 @@ class RootProcessMemoryReader(
         require(length in 1..MAX_READ_SIZE) { "Read length must be between 1 and $MAX_READ_SIZE bytes" }
         val offset = parseAddress(address)
         val pid = findPid() ?: throw IOException("$packageName is not running")
-        return readAtPid(pid, offset, length)
+        return readAtPid(pid, offset.toLong(), length)
     }
 
     private fun readAtPid(pid: Int, address: Long, length: Int): ByteArray {
