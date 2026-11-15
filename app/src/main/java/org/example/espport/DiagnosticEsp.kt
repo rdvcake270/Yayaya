@@ -111,7 +111,7 @@ internal class RootBoxFrameProvider(
         var steps = 0
         while (parent >= 0 && steps++ < 128) {
             val parentMatrix = readMatrix(reader, matrixList + parent * DumpOffsets.TRANSFORM_MATRIX_STRIDE)
-            result.position = result.position + rotate(scale(result.position, parentMatrix.scale), parentMatrix.rotation)
+            result.position = add(result.position, rotate(scale(result.position, parentMatrix.scale), parentMatrix.rotation))
             parent = reader.readInt32("0x${(matrixIndices + parent * 4L).toString(16)}")
         }
         return result.position
@@ -137,6 +137,8 @@ internal class RootBoxFrameProvider(
     }
 
     private fun scale(v: Vec3, s: Vec3) = Vec3(v.x * s.x, v.y * s.y, v.z * s.z)
+
+    private fun add(a: Vec3, b: Vec3) = Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
 
     private fun rotate(v: Vec3, q: Quaternion): Vec3 {
         val tx = 2f * (q.y * v.z - q.z * v.y)
