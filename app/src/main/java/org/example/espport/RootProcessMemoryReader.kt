@@ -163,10 +163,6 @@ class RootProcessMemoryReader(
 
     /** Returns a mapped candidate, including one whose IL2CPP TypeInfo is not initialized yet. */
     fun resolveGameClassTypeInfoSlot(module: Long): Long? {
-        // CurrentMatch contains a direct reference to the generated GameFacade
-        // TypeInfo global. Prefer it over the static RVAs below, which are only
-        // candidates from the dump and can move between builds.
-        resolveGameFacadeTypeInfoSlot(module)?.let { return it }
         var mappedUninitializedSlot: Long? = null
         for (rva in DumpOffsets.GAME_CLASS_RVA_CANDIDATES) {
             val slot = module + rva
@@ -245,6 +241,11 @@ class RootProcessMemoryReader(
             lines += "ELF header ${hex(readInt32("0x${module.toString(16)}", littleEndian = true).toLong() and 0xffffffffL)}"
             requireAnalyzedCurrentMatch(module)
             lines += describeGameFacadeCurrentMatch(module)
+            for (rva in DumpOffsets.GAME_CLASS_RVA_CANDIDATES) {
+                val slot = module + rva
+                val value = runCatching { readPointer(slot) }.getOrNull()
+                lines += "GameFacade candidate ${hex(rva)} [${hex(slot)}] -> ${value?.let(::hex) ?: "unreadable"}"
+            }
             // TypeInfo globals may be populated lazily by IL2CPP. Retry briefly,
             // but never fall back to an unverified RVA and interpret a zero slot
             // as a class pointer.
