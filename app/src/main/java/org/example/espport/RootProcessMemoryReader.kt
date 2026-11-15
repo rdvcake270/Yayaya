@@ -120,9 +120,7 @@ class RootProcessMemoryReader(
                 var literalDelta = ((adrp ushr 5) and 0x7ffffL).toInt() shl 2
                 if ((literalDelta and (1 shl 20)) != 0) literalDelta -= (1 shl 21)
                 val literal = method + index * 4L + literalDelta
-                runCatching { readPointer(literal) }.getOrNull()?.let { value ->
-                    if (value >= 0x10000L) return literal
-                }
+                if (isReadableDataSlot(literal)) return literal
             }
             if ((adrp and 0x9F000000L) != 0x90000000L) continue
             val rd = (adrp and 0x1f).toInt()
@@ -149,9 +147,7 @@ class RootProcessMemoryReader(
                     val rn = ((instruction ushr 5) and 0x1f).toInt()
                     if (rn == register) {
                         val slot = address + (((instruction ushr 10) and 0xfffL) * 8L)
-                        runCatching { readPointer(slot) }.getOrNull()?.let { value ->
-                            if (value >= 0x10000L) return slot
-                        }
+                        if (isReadableDataSlot(slot)) return slot
                     }
                     break
                 }
@@ -160,8 +156,17 @@ class RootProcessMemoryReader(
         return null
     }
 
+    private fun isReadableDataSlot(address: Long): Boolean {
+        val permissions = runCatching { findMappingPermissions(address) }.getOrNull()
+        return permissions != null && permissions.contains('r') && !permissions.contains('x')
+    }
+
     /** Returns a mapped candidate, including one whose IL2CPP TypeInfo is not initialized yet. */
     fun resolveGameClassTypeInfoSlot(module: Long): Long? {
+        // CurrentMatch contains a direct reference to the generated GameFacade
+        // TypeInfo global. Prefer it over the static RVAs below, which are only
+        // candidates from the dump and can move between builds.
+        resolveGameFacadeTypeInfoSlot(module)?.let { return it }
         var mappedUninitializedSlot: Long? = null
         for (rva in DumpOffsets.GAME_CLASS_RVA_CANDIDATES) {
             val slot = module + rva

@@ -59,7 +59,8 @@ internal class RootBoxFrameProvider(
 
     private fun readFrameNow(): EspFrame {
         val module = reader.findModuleBase() ?: error("libil2cpp.so is not mapped")
-        val typeInfoSlot = reader.resolveGameClassTypeInfoSlot(module)
+        val typeInfoSlot = reader.resolveGameFacadeTypeInfoSlot(module)
+            ?: reader.resolveGameClassTypeInfoSlot(module)
             ?: error("GameFacade TypeInfo was not resolved from a validated mapped slot")
         val typeInfo = reader.readPointer(typeInfoSlot)
         if (typeInfo == 0L) {
