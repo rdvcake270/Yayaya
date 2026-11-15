@@ -31,10 +31,20 @@ class RootProcessMemoryReader(
         require(moduleName.matches(Regex("[A-Za-z0-9_.-]+\\.so"))) { "Invalid library name" }
         val pid = findPid() ?: return null
         val output = runRoot(
-            "awk '\$3 == \"00000000\" && \$NF ~ /\\/$moduleName\$/ { split(\$1, r, \"-\"); print r[1]; exit }' /proc/$pid/maps",
+            "awk '\$3 == \"00000000\" && \$NF ~ /\\/$moduleName\$/ { split(\$1, r, \"-\"); print r[1] }' /proc/$pid/maps",
         )
         if (output.exitCode != 0) throw IOException("Could not read $moduleName mapping")
-        return output.stdout.trim().takeIf(String::isNotEmpty)?.toLongOrNull(16)
+        val candidates = output.stdout.lineSequence().mapNotNull { it.trim().toLongOrNull(16) }.toList()
+        for (candidate in candidates) {
+            val header = runCatching { readAtPid(pid, candidate, 4) }.getOrNull() ?: continue
+            if (header.size == 4 &&
+                (header[0].toInt() and 0xff) == 0x7f &&
+                (header[1].toInt() and 0xff) == 0x45 &&
+                (header[2].toInt() and 0xff) == 0x4c &&
+                (header[3].toInt() and 0xff) == 0x46
+            ) return candidate
+        }
+        return candidates.firstOrNull()
     }
 
     fun findMappingPermissions(address: Long): String? {
@@ -56,8 +66,12 @@ class RootProcessMemoryReader(
         require(length in 1..MAX_READ_SIZE) { "Read length must be between 1 and $MAX_READ_SIZE bytes" }
         val offset = parseAddress(address)
         val pid = findPid() ?: throw IOException("$packageName is not running")
+        return readAtPid(pid, offset, length)
+    }
+
+    private fun readAtPid(pid: Int, address: Long, length: Int): ByteArray {
         val output = runRoot(
-            "dd if=/proc/$pid/mem bs=1 skip=$offset count=$length 2>/dev/null | base64 | tr -d '\\n'",
+            "dd if=/proc/$pid/mem bs=1 skip=$address count=$length 2>/dev/null | base64 | tr -d '\\n'",
         )
         if (output.exitCode != 0) throw IOException("Root memory read failed (exit ${output.exitCode})")
         val bytes = try {
@@ -171,6 +185,7 @@ class RootProcessMemoryReader(
         try {
             val module = findModuleBase() ?: throw IOException("libil2cpp.so is not mapped (is the game running?)")
             lines += "PID ${findPid()}; libil2cpp.so base ${hex(module)}"
+            lines += "ELF header ${hex(readInt32("0x${module.toString(16)}", littleEndian = true).toLong() and 0xffffffffL)}"
             lines += describeGameFacadeCurrentMatch(module)
             val typeInfoSlot = resolveGameFacadeTypeInfoSlot(module)
                 ?: (module + DumpOffsets.GAME_CLASS_RVA)
