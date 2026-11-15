@@ -3,6 +3,7 @@ package org.example.espport
 /** Offsets from offsets_e_rva.hpp for the current ARM64 IL2CPP build. */
 internal object DumpOffsets {
     const val GAME_CLASS_RVA = 0xA872380L
+    const val GAME_FACADE_CURRENT_MATCH_RVA = 0x75F0AE8L
     const val GAME_CURRENT_GAME = 0x8L
     const val GAME_MATCH = 0x90L
     const val MATCH_LOCAL_PLAYER = 0xD8L

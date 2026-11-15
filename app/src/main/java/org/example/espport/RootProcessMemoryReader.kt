@@ -93,6 +93,51 @@ class RootProcessMemoryReader(
         return FloatArray(count) { buffer.float }
     }
 
+    /** Resolves the GameFacade TypeInfo global referenced by the ARM64 CurrentMatch method. */
+    fun resolveGameFacadeTypeInfoSlot(module: Long): Long? {
+        val method = module + DumpOffsets.GAME_FACADE_CURRENT_MATCH_RVA
+        val code = read("0x${method.toString(16)}", 64)
+        val instructions = IntArray(code.size / 4) { index ->
+            ByteBuffer.wrap(code, index * 4, 4).order(ByteOrder.LITTLE_ENDIAN).int
+        }
+        for (index in instructions.indices) {
+            val adrp = instructions[index].toLong() and 0xffffffffL
+            if ((adrp and 0x9F000000L) != 0x90000000L) continue
+            val rd = (adrp and 0x1f).toInt()
+            val immlo = ((adrp ushr 29) and 0x3).toInt()
+            val immhi = ((adrp ushr 5) and 0x7ffff).toInt()
+            var pageDelta = (immhi shl 2) or immlo
+            if ((pageDelta and (1 shl 20)) != 0) pageDelta -= (1 shl 21)
+            val page = ((method + index * 4L) and -0x1000L) + pageDelta * 0x1000L
+            var address = page
+            var register = rd
+            for (next in index + 1 until minOf(index + 6, instructions.size)) {
+                val instruction = instructions[next].toLong() and 0xffffffffL
+                if ((instruction and 0xFFC00000L) == 0x91000000L) {
+                    val rn = ((instruction ushr 5) and 0x1f).toInt()
+                    val addRd = (instruction and 0x1f).toInt()
+                    if (rn != register) break
+                    val immediate = ((instruction ushr 10) and 0xfffL) shl
+                        (if (((instruction ushr 22) and 1L) != 0L) 12 else 0)
+                    address += immediate
+                    register = addRd
+                    continue
+                }
+                if ((instruction and 0xFFC00000L) == 0xF9400000L) {
+                    val rn = ((instruction ushr 5) and 0x1f).toInt()
+                    if (rn == register) {
+                        val slot = address + (((instruction ushr 10) and 0xfffL) * 8L)
+                        runCatching { readPointer(slot) }.getOrNull()?.let { value ->
+                            if (value >= 0x10000L) return slot
+                        }
+                    }
+                    break
+                }
+            }
+        }
+        return null
+    }
+
     /** Traces the offsets from offsets_e_rva.hpp against the Android process. */
     fun probeOffsets(): String {
         val lines = mutableListOf<String>()
@@ -107,9 +152,10 @@ class RootProcessMemoryReader(
         try {
             val module = findModuleBase() ?: throw IOException("libil2cpp.so is not mapped (is the game running?)")
             lines += "PID ${findPid()}; libil2cpp.so base ${hex(module)}"
-            val typeInfoSlot = module + DumpOffsets.GAME_CLASS_RVA
+            val typeInfoSlot = resolveGameFacadeTypeInfoSlot(module)
+                ?: (module + DumpOffsets.GAME_CLASS_RVA)
             val mapping = findMappingPermissions(typeInfoSlot)
-            lines += "Game class RVA ${hex(DumpOffsets.GAME_CLASS_RVA)} is in mapping ${mapping ?: "unknown"}"
+            lines += "Game class TypeInfo slot ${hex(typeInfoSlot)} is in mapping ${mapping ?: "unknown"}"
             if (mapping?.contains('x') == true) {
                 lines += "Stopped: the game class RVA lands in executable memory, so it cannot be used as the TypeInfo pointer slot."
                 return lines.joinToString("\n")
