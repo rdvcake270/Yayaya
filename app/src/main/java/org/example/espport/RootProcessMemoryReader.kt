@@ -160,6 +160,23 @@ class RootProcessMemoryReader(
         return null
     }
 
+    /** Accepts only a candidate whose complete GameFacade pointer chain is live. */
+    fun resolveGameClassTypeInfoSlot(module: Long): Long? {
+        for (rva in DumpOffsets.GAME_CLASS_RVA_CANDIDATES) {
+            val slot = module + rva
+            val valid = runCatching {
+                val typeInfo = readPointer(slot)
+                if (typeInfo < 0x10000L) return@runCatching false
+                val statics = readPointer(typeInfo + DumpOffsets.IL2CPP_STATIC_FIELDS)
+                val game = readPointer(statics + DumpOffsets.GAME_CURRENT_GAME)
+                val match = readPointer(game + DumpOffsets.GAME_MATCH)
+                statics >= 0x10000L && game >= 0x10000L && match >= 0x10000L
+            }.getOrDefault(false)
+            if (valid) return slot
+        }
+        return resolveGameFacadeTypeInfoSlot(module)
+    }
+
     fun describeGameFacadeCurrentMatch(module: Long): String {
         val method = module + DumpOffsets.GAME_FACADE_CURRENT_MATCH_RVA
         val code = runCatching { read("0x${method.toString(16)}", 64) }.getOrNull()
@@ -187,7 +204,7 @@ class RootProcessMemoryReader(
             lines += "PID ${findPid()}; libil2cpp.so base ${hex(module)}"
             lines += "ELF header ${hex(readInt32("0x${module.toString(16)}", littleEndian = true).toLong() and 0xffffffffL)}"
             lines += describeGameFacadeCurrentMatch(module)
-            val typeInfoSlot = resolveGameFacadeTypeInfoSlot(module)
+            val typeInfoSlot = resolveGameClassTypeInfoSlot(module)
                 ?: (module + DumpOffsets.GAME_CLASS_RVA)
             val mapping = findMappingPermissions(typeInfoSlot)
             lines += "Game class TypeInfo slot ${hex(typeInfoSlot)} is in mapping ${mapping ?: "unknown"}"

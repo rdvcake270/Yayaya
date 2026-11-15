@@ -59,7 +59,7 @@ internal class RootBoxFrameProvider(
 
     private fun readFrameNow(): EspFrame {
         val module = reader.findModuleBase() ?: error("libil2cpp.so is not mapped")
-        val typeInfoSlot = reader.resolveGameFacadeTypeInfoSlot(module)
+        val typeInfoSlot = reader.resolveGameClassTypeInfoSlot(module)
             ?: (module + DumpOffsets.GAME_CLASS_RVA)
         val typeInfo = reader.readPointer(typeInfoSlot)
         val staticFields = reader.readPointer(typeInfo + DumpOffsets.IL2CPP_STATIC_FIELDS)
