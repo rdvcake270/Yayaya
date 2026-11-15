@@ -160,21 +160,39 @@ class RootProcessMemoryReader(
         return null
     }
 
-    /** Accepts only a candidate whose complete GameFacade pointer chain is live. */
+    /** Returns a mapped candidate, including one whose IL2CPP TypeInfo is not initialized yet. */
     fun resolveGameClassTypeInfoSlot(module: Long): Long? {
+        var mappedUninitializedSlot: Long? = null
         for (rva in DumpOffsets.GAME_CLASS_RVA_CANDIDATES) {
             val slot = module + rva
             val valid = runCatching {
+                val slotPermissions = findMappingPermissions(slot)
+                if (slotPermissions == null || !slotPermissions.contains('r') || slotPermissions.contains('x')) {
+                    return@runCatching false
+                }
                 val typeInfo = readPointer(slot)
+                if (typeInfo == 0L) {
+                    // IL2CPP leaves TypeInfo globals zero until the class is
+                    // touched. Keep the mapped slot so callers can distinguish
+                    // "not initialized yet" from an invalid RVA.
+                    mappedUninitializedSlot = slot
+                    return@runCatching false
+                }
+                // A TypeInfo global can be initialized before GameFacade has an
+                // active match. Do not reject it merely because the game/match
+                // chain is currently null.
                 if (typeInfo < 0x10000L) return@runCatching false
-                val statics = readPointer(typeInfo + DumpOffsets.IL2CPP_STATIC_FIELDS)
-                val game = readPointer(statics + DumpOffsets.GAME_CURRENT_GAME)
-                val match = readPointer(game + DumpOffsets.GAME_MATCH)
-                statics >= 0x10000L && game >= 0x10000L && match >= 0x10000L
+                val typeInfoPermissions = findMappingPermissions(typeInfo)
+                if (typeInfoPermissions == null || !typeInfoPermissions.contains('r')) {
+                    return@runCatching false
+                }
+                val staticFields = readPointer(typeInfo + DumpOffsets.IL2CPP_STATIC_FIELDS)
+                staticFields >= 0x10000L &&
+                    findMappingPermissions(staticFields)?.contains('r') == true
             }.getOrDefault(false)
             if (valid) return slot
         }
-        return resolveGameFacadeTypeInfoSlot(module)
+        return mappedUninitializedSlot
     }
 
     fun describeGameFacadeCurrentMatch(module: Long): String {
@@ -185,6 +203,23 @@ class RootProcessMemoryReader(
         return buildString {
             append("CurrentMatch code ${hex(method)}:")
             repeat(code.size / 4) { append(" ").append((words.int.toLong() and 0xffffffffL).toString(16)) }
+        }
+    }
+
+    /** Refuses to use offsets when the loaded binary is not the analyzed build. */
+    private fun requireAnalyzedCurrentMatch(module: Long) {
+        val method = module + DumpOffsets.GAME_FACADE_CURRENT_MATCH_RVA
+        val code = read("0x${method.toString(16)}", 16)
+        val expected = intArrayOf(0xF94002D4.toInt(), 0xAA1503E0.toInt(), 0x94BA1E5E.toInt(), 0x79425EA8)
+        for (index in expected.indices) {
+            val actual = ByteBuffer.wrap(code, index * 4, 4)
+                .order(ByteOrder.LITTLE_ENDIAN).int
+            if (actual != expected[index]) {
+                throw IOException(
+                    "CurrentMatch bytes do not match analyzed libil2cpp.so at ${hex(method)} " +
+                        "(word ${index}: ${hex(actual.toLong() and 0xffffffffL)})",
+                )
+            }
         }
     }
 
@@ -203,18 +238,32 @@ class RootProcessMemoryReader(
             val module = findModuleBase() ?: throw IOException("libil2cpp.so is not mapped (is the game running?)")
             lines += "PID ${findPid()}; libil2cpp.so base ${hex(module)}"
             lines += "ELF header ${hex(readInt32("0x${module.toString(16)}", littleEndian = true).toLong() and 0xffffffffL)}"
+            requireAnalyzedCurrentMatch(module)
             lines += describeGameFacadeCurrentMatch(module)
-            val typeInfoSlot = resolveGameClassTypeInfoSlot(module)
-                ?: (module + DumpOffsets.GAME_CLASS_RVA)
-            val mapping = findMappingPermissions(typeInfoSlot)
-            lines += "Game class TypeInfo slot ${hex(typeInfoSlot)} is in mapping ${mapping ?: "unknown"}"
+            // TypeInfo globals may be populated lazily by IL2CPP. Retry briefly,
+            // but never fall back to an unverified RVA and interpret a zero slot
+            // as a class pointer.
+            var typeInfoSlot: Long? = null
+            repeat(20) {
+                typeInfoSlot = resolveGameClassTypeInfoSlot(module)
+                if (typeInfoSlot != null) return@repeat
+                Thread.sleep(100)
+            }
+            val resolvedTypeInfoSlot = typeInfoSlot
+                ?: throw IOException("GameFacade TypeInfo slot is unresolved; class may not be initialized")
+            val mapping = findMappingPermissions(resolvedTypeInfoSlot)
+            lines += "GameFacade TypeInfo slot ${hex(resolvedTypeInfoSlot)} is in mapping ${mapping ?: "unknown"}"
             if (mapping?.contains('x') == true) {
-                lines += "Stopped: the game class RVA lands in executable memory, so it cannot be used as the TypeInfo pointer slot."
+                lines += "Stopped: the GameFacade RVA lands in executable memory, so it cannot be used as the TypeInfo pointer slot."
                 return lines.joinToString("\n")
             }
-            val typeInfo = readPointer(typeInfoSlot)
-            lines += "Game class TypeInfo [${hex(typeInfoSlot)}] -> ${hex(typeInfo)}"
-            if (typeInfo < 0x10000L) throw IOException("Game class TypeInfo returned a null or implausible pointer")
+            val typeInfo = readPointer(resolvedTypeInfoSlot)
+            lines += "GameFacade TypeInfo [${hex(resolvedTypeInfoSlot)}] -> ${hex(typeInfo)}"
+            if (typeInfo == 0L) {
+                lines += "GameFacade TypeInfo is not initialized yet; enter a live match and retry."
+                return lines.joinToString("\n")
+            }
+            if (typeInfo < 0x10000L) throw IOException("GameFacade TypeInfo returned an implausible pointer")
             val staticFields = pointer("GameFacade static fields", typeInfo, 0xB8)
             val game = pointer("Current game", staticFields, DumpOffsets.GAME_CURRENT_GAME)
             val match = pointer("Match", game, DumpOffsets.GAME_MATCH)
