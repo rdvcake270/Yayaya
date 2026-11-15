@@ -167,7 +167,7 @@ class RootProcessMemoryReader(
     private data class RootOutput(val stdout: String, val exitCode: Int)
 
     companion object {
-        const val TARGET_PACKAGE = "com.offline.blockshot"
+        const val TARGET_PACKAGE = "com.dts.freefiremax"
         const val MAX_READ_SIZE = 4096
     }
 }
