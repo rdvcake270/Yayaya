@@ -96,12 +96,20 @@ class RootProcessMemoryReader(
     /** Resolves the GameFacade TypeInfo global referenced by the ARM64 CurrentMatch method. */
     fun resolveGameFacadeTypeInfoSlot(module: Long): Long? {
         val method = module + DumpOffsets.GAME_FACADE_CURRENT_MATCH_RVA
-        val code = read("0x${method.toString(16)}", 64)
+        val code = runCatching { read("0x${method.toString(16)}", 64) }.getOrNull() ?: return null
         val instructions = IntArray(code.size / 4) { index ->
             ByteBuffer.wrap(code, index * 4, 4).order(ByteOrder.LITTLE_ENDIAN).int
         }
         for (index in instructions.indices) {
             val adrp = instructions[index].toLong() and 0xffffffffL
+            if ((adrp and 0xFF000000L) == 0x58000000L) {
+                var literalDelta = ((adrp ushr 5) and 0x7ffffL).toInt() shl 2
+                if ((literalDelta and (1 shl 20)) != 0) literalDelta -= (1 shl 21)
+                val literal = method + index * 4L + literalDelta
+                runCatching { readPointer(literal) }.getOrNull()?.let { value ->
+                    if (value >= 0x10000L) return literal
+                }
+            }
             if ((adrp and 0x9F000000L) != 0x90000000L) continue
             val rd = (adrp and 0x1f).toInt()
             val immlo = ((adrp ushr 29) and 0x3).toInt()
@@ -138,6 +146,17 @@ class RootProcessMemoryReader(
         return null
     }
 
+    fun describeGameFacadeCurrentMatch(module: Long): String {
+        val method = module + DumpOffsets.GAME_FACADE_CURRENT_MATCH_RVA
+        val code = runCatching { read("0x${method.toString(16)}", 64) }.getOrNull()
+            ?: return "CurrentMatch code unreadable at ${hex(method)}"
+        val words = ByteBuffer.wrap(code).order(ByteOrder.LITTLE_ENDIAN)
+        return buildString {
+            append("CurrentMatch code ${hex(method)}:")
+            repeat(code.size / 4) { append(" ").append((words.int.toLong() and 0xffffffffL).toString(16)) }
+        }
+    }
+
     /** Traces the offsets from offsets_e_rva.hpp against the Android process. */
     fun probeOffsets(): String {
         val lines = mutableListOf<String>()
@@ -152,6 +171,7 @@ class RootProcessMemoryReader(
         try {
             val module = findModuleBase() ?: throw IOException("libil2cpp.so is not mapped (is the game running?)")
             lines += "PID ${findPid()}; libil2cpp.so base ${hex(module)}"
+            lines += describeGameFacadeCurrentMatch(module)
             val typeInfoSlot = resolveGameFacadeTypeInfoSlot(module)
                 ?: (module + DumpOffsets.GAME_CLASS_RVA)
             val mapping = findMappingPermissions(typeInfoSlot)
