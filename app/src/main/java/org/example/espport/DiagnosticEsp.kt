@@ -59,15 +59,10 @@ internal class RootBoxFrameProvider(
 
     private fun readFrameNow(): EspFrame {
         val module = reader.findModuleBase() ?: error("libil2cpp.so is not mapped")
-        val typeInfoSlot = reader.resolveGameClassTypeInfoSlot(module)
-            ?: error("GameFacade TypeInfo was not resolved from a validated mapped slot")
-        val typeInfo = reader.readPointer(typeInfoSlot)
-        if (typeInfo == 0L) {
-            return EspFrame(status = "Waiting for GameFacade TypeInfo initialization")
-        }
-        val staticFields = reader.readPointer(typeInfo + DumpOffsets.IL2CPP_STATIC_FIELDS)
-        val game = reader.readPointer(staticFields + DumpOffsets.GAME_CURRENT_GAME)
-        val match = reader.readPointer(game + DumpOffsets.GAME_MATCH)
+        val state = reader.resolveGameState(module)
+            ?: return EspFrame(status = "Waiting for GameFacade/InitBase initialization")
+        val game = state.game
+        val match = state.match
         val localPlayer = reader.readPointer(match + DumpOffsets.MATCH_LOCAL_PLAYER)
         val cameraManager = reader.readPointer(game + DumpOffsets.CAMERA_MANAGER)
         val camera = reader.readPointer(cameraManager + DumpOffsets.CAMERA_MANAGER_CAMERA)

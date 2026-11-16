@@ -12,6 +12,8 @@ class RootProcessMemoryReader(
     private val packageName: String = TARGET_PACKAGE,
     private val timeoutSeconds: Long = 5,
 ) {
+    data class GameState(val game: Long, val match: Long, val source: String)
+
     init {
         require(packageName.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))) {
             "Invalid Android package name"
@@ -196,6 +198,43 @@ class RootProcessMemoryReader(
         return mappedUninitializedSlot
     }
 
+    /** Resolves the game/match state using the current chain and VZX-style InitBase fallbacks. */
+    fun resolveGameState(module: Long): GameState? {
+        for (rva in DumpOffsets.GAME_CLASS_RVA_CANDIDATES) {
+            val slot = module + rva
+            val state = runCatching {
+                if (!isReadableDataSlot(slot)) return@runCatching null
+                val typeInfo = readPointer(slot)
+                if (typeInfo < 0x10000L) return@runCatching null
+                val staticFields = readPointer(typeInfo + DumpOffsets.IL2CPP_STATIC_FIELDS)
+                if (staticFields < 0x10000L) return@runCatching null
+                val game = readPointer(staticFields + DumpOffsets.GAME_CURRENT_GAME)
+                val match = readPointer(game + DumpOffsets.GAME_MATCH)
+                if (game < 0x10000L || match < 0x10000L) null
+                else GameState(game, match, "TypeInfo ${hex(rva)}")
+            }.getOrNull()
+            if (state != null) return state
+        }
+
+        for (rva in DumpOffsets.GAME_INITBASE_RVA_CANDIDATES) {
+            val slot = module + rva
+            val state = runCatching {
+                if (!isReadableDataSlot(slot)) return@runCatching null
+                val initBase = readPointer(slot)
+                if (initBase < 0x10000L) return@runCatching null
+                val gameFacade = readPointer(initBase)
+                val staticClass = readPointer(gameFacade + DumpOffsets.LEGACY_STATIC_CLASS)
+                val game = readPointer(staticClass)
+                val match = readPointer(game + DumpOffsets.LEGACY_CURRENT_MATCH)
+                if (gameFacade < 0x10000L || staticClass < 0x10000L ||
+                    game < 0x10000L || match < 0x10000L
+                ) null else GameState(game, match, "InitBase ${hex(rva)}")
+            }.getOrNull()
+            if (state != null) return state
+        }
+        return null
+    }
+
     fun describeGameFacadeCurrentMatch(module: Long): String {
         val method = module + DumpOffsets.GAME_FACADE_CURRENT_MATCH_RVA
         val code = runCatching { read("0x${method.toString(16)}", 64) }.getOrNull()
@@ -246,6 +285,11 @@ class RootProcessMemoryReader(
                 val value = runCatching { readPointer(slot) }.getOrNull()
                 lines += "GameFacade candidate ${hex(rva)} [${hex(slot)}] -> ${value?.let(::hex) ?: "unreadable"}"
             }
+            for (rva in DumpOffsets.GAME_INITBASE_RVA_CANDIDATES) {
+                val slot = module + rva
+                val value = runCatching { readPointer(slot) }.getOrNull()
+                lines += "InitBase candidate ${hex(rva)} [${hex(slot)}] -> ${value?.let(::hex) ?: "unreadable"}"
+            }
             // TypeInfo globals may be populated lazily by IL2CPP. Retry briefly,
             // but never fall back to an unverified RVA and interpret a zero slot
             // as a class pointer.
@@ -266,6 +310,10 @@ class RootProcessMemoryReader(
             val typeInfo = readPointer(resolvedTypeInfoSlot)
             lines += "GameFacade TypeInfo [${hex(resolvedTypeInfoSlot)}] -> ${hex(typeInfo)}"
             if (typeInfo == 0L) {
+                resolveGameState(module)?.takeIf { it.source.startsWith("InitBase") }?.let { state ->
+                    lines += "${state.source} resolved game ${hex(state.game)} and match ${hex(state.match)}"
+                    return lines.joinToString("\n")
+                }
                 lines += "GameFacade TypeInfo is not initialized yet; enter a live match and retry."
                 return lines.joinToString("\n")
             }

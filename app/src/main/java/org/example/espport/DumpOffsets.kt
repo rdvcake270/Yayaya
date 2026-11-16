@@ -16,11 +16,12 @@ internal object DumpOffsets {
         0xA872380L,
         0xA86EDB0L,
         0xA86D278L,
+    )
+    /** InitBase-style globals used by the external VZX data loop. */
+    val GAME_INITBASE_RVA_CANDIDATES = longArrayOf(
         0xA86E5B8L,
         0xA86E380L,
         0xA988320L,
-        // External VZX fallback profiles: these are legacy-build globals,
-        // so they remain last and still pass the same runtime validation.
         0xA342EFCL,
         0xABFF6E0L,
         0xA9870BCL,
@@ -33,6 +34,8 @@ internal object DumpOffsets {
     const val MATCH_ENTITIES = 0x128L
     const val MATCH_PLAYER_LIST = 0x158L
     const val IL2CPP_STATIC_FIELDS = 0xB8L
+    const val LEGACY_STATIC_CLASS = 0x5CL
+    const val LEGACY_CURRENT_MATCH = 0x50L
     const val LIST_ITEMS = 0x10L
     const val LIST_SIZE = 0x18L
     const val ARRAY_DATA = 0x20L
