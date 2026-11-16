@@ -14,6 +14,12 @@ class RootProcessMemoryReader(
 ) {
     data class GameState(val game: Long, val match: Long, val source: String)
 
+    private var cachedPid: Int? = null
+    private var cachedPidAt = 0L
+    private var cachedMapsPid: Int? = null
+    private var cachedMapsAt = 0L
+    private var cachedMaps: List<String> = emptyList()
+
     init {
         require(packageName.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))) {
             "Invalid Android package name"
@@ -23,9 +29,14 @@ class RootProcessMemoryReader(
 
     /** Returns the first PID reported by `pidof`, or null if the app is not running. */
     fun findPid(): Int? {
+        val now = System.currentTimeMillis()
+        if (now - cachedPidAt < PID_CACHE_MILLIS) return cachedPid
         val output = runRoot("pidof $packageName")
-        if (output.exitCode != 0) return null
-        return output.stdout.trim().split(Regex("\\s+")).firstNotNullOfOrNull { it.toIntOrNull() }
+        val pid = if (output.exitCode != 0) null else
+            output.stdout.trim().split(Regex("\\s+")).firstNotNullOfOrNull { it.toIntOrNull() }
+        cachedPid = pid
+        cachedPidAt = now
+        return pid
     }
 
     /** Returns the first file-offset-zero mapping for a loaded native library. */
@@ -51,9 +62,15 @@ class RootProcessMemoryReader(
 
     fun findMappingPermissions(address: Long): String? {
         val pid = findPid() ?: return null
-        val maps = runRoot("cat /proc/$pid/maps")
-        if (maps.exitCode != 0) throw IOException("Could not read target memory map")
-        return maps.stdout.lineSequence().firstNotNullOfOrNull { line ->
+        val now = System.currentTimeMillis()
+        if (cachedMapsPid != pid || now - cachedMapsAt >= MAPS_CACHE_MILLIS) {
+            val maps = runRoot("cat /proc/$pid/maps")
+            if (maps.exitCode != 0) throw IOException("Could not read target memory map")
+            cachedMaps = maps.stdout.lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
+            cachedMapsPid = pid
+            cachedMapsAt = now
+        }
+        return cachedMaps.firstNotNullOfOrNull { line ->
             val columns = line.trim().split(Regex("\\s+"))
             val range = columns.firstOrNull()?.split('-', limit = 2) ?: return@firstNotNullOfOrNull null
             if (range.size != 2) return@firstNotNullOfOrNull null
@@ -294,10 +311,10 @@ class RootProcessMemoryReader(
             // but never fall back to an unverified RVA and interpret a zero slot
             // as a class pointer.
             var typeInfoSlot: Long? = null
-            repeat(20) {
+            repeat(4) {
                 typeInfoSlot = resolveGameClassTypeInfoSlot(module)
                 if (typeInfoSlot != null) return@repeat
-                Thread.sleep(100)
+                if (it < 3) Thread.sleep(100)
             }
             val resolvedTypeInfoSlot = typeInfoSlot
                 ?: throw IOException("GameFacade TypeInfo slot is unresolved; class may not be initialized")
@@ -370,5 +387,7 @@ class RootProcessMemoryReader(
     companion object {
         const val TARGET_PACKAGE = "com.dts.freefiremax"
         const val MAX_READ_SIZE = 4096
+        private const val PID_CACHE_MILLIS = 250L
+        private const val MAPS_CACHE_MILLIS = 1_000L
     }
 }
