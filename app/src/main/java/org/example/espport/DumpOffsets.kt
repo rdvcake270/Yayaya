@@ -19,6 +19,12 @@ internal object DumpOffsets {
         0xA86E5B8L,
         0xA86E380L,
         0xA988320L,
+        // External VZX fallback profiles: these are legacy-build globals,
+        // so they remain last and still pass the same runtime validation.
+        0xA342EFCL,
+        0xABFF6E0L,
+        0xA9870BCL,
+        0xAD6DC18L,
     )
     const val GAME_FACADE_CURRENT_MATCH_RVA = 0x75F0AE8L
     const val GAME_CURRENT_GAME = 0x8L
