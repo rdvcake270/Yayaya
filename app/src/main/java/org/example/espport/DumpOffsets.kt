@@ -3,7 +3,23 @@ package org.example.espport
 /** Offsets from offsets_e_rva.hpp for the current ARM64 IL2CPP build. */
 internal object DumpOffsets {
     const val GAME_CLASS_RVA = 0xA872380L
-    val GAME_CLASS_RVA_CANDIDATES = longArrayOf(0xA872380L, 0xA86EDB0L, 0xA86D278L)
+    /**
+     * Globals observed in the current GameFacade initialization sequence.
+     *
+     * The first three are the TypeInfo-slot candidates found from managed
+     * references.  The latter three are the values passed to the shared
+     * class-initialization helper (the `off_*[0]` arguments in the native
+     * pseudocode).  Builds differ in which one is populated first, so keep
+     * all of them in the probe order.
+     */
+    val GAME_CLASS_RVA_CANDIDATES = longArrayOf(
+        0xA872380L,
+        0xA86EDB0L,
+        0xA86D278L,
+        0xA86E5B8L,
+        0xA86E380L,
+        0xA988320L,
+    )
     const val GAME_FACADE_CURRENT_MATCH_RVA = 0x75F0AE8L
     const val GAME_CURRENT_GAME = 0x8L
     const val GAME_MATCH = 0x90L
