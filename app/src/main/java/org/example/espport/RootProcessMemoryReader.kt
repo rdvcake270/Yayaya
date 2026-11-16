@@ -252,6 +252,38 @@ class RootProcessMemoryReader(
         return null
     }
 
+    private fun describeInitBaseCandidate(module: Long, rva: Long): String {
+        val slot = module + rva
+        val permissions = findMappingPermissions(slot)
+            ?: return "InitBase ${hex(rva)} rejected: unmapped"
+        if (!permissions.contains('r') || permissions.contains('x')) {
+            return "InitBase ${hex(rva)} rejected: mapping $permissions"
+        }
+        val initBase = runCatching { readPointer(slot) }.getOrNull()
+            ?: return "InitBase ${hex(rva)} unreadable"
+        if (initBase < 0x10000L) return "InitBase ${hex(rva)} -> ${hex(initBase)}"
+        val gameFacade = runCatching { readPointer(initBase) }.getOrNull()
+            ?: return "InitBase ${hex(rva)} -> ${hex(initBase)}, GameFacade unreadable"
+        if (gameFacade < 0x10000L) {
+            return "InitBase ${hex(rva)} -> ${hex(initBase)}, GameFacade ${hex(gameFacade)}"
+        }
+        val staticClass = runCatching {
+            readPointer(gameFacade + DumpOffsets.LEGACY_STATIC_CLASS)
+        }.getOrNull() ?: return "InitBase ${hex(rva)} -> ${hex(initBase)}, GameFacade ${hex(gameFacade)}, StaticClass unreadable"
+        if (staticClass < 0x10000L) {
+            return "InitBase ${hex(rva)} -> ${hex(initBase)}, GameFacade ${hex(gameFacade)}, StaticClass ${hex(staticClass)}"
+        }
+        val game = runCatching { readPointer(staticClass) }.getOrNull()
+            ?: return "InitBase ${hex(rva)} -> ${hex(initBase)}, GameFacade ${hex(gameFacade)}, CurrentGame unreadable"
+        if (game < 0x10000L) {
+            return "InitBase ${hex(rva)} -> ${hex(initBase)}, GameFacade ${hex(gameFacade)}, CurrentGame ${hex(game)}"
+        }
+        val match = runCatching {
+            readPointer(game + DumpOffsets.LEGACY_CURRENT_MATCH)
+        }.getOrNull() ?: return "InitBase ${hex(rva)} -> ${hex(initBase)}, CurrentGame ${hex(game)}, Match unreadable"
+        return "InitBase ${hex(rva)} -> ${hex(initBase)}, GameFacade ${hex(gameFacade)}, CurrentGame ${hex(game)}, Match ${hex(match)}"
+    }
+
     fun describeGameFacadeCurrentMatch(module: Long): String {
         val method = module + DumpOffsets.GAME_FACADE_CURRENT_MATCH_RVA
         val code = runCatching { read("0x${method.toString(16)}", 64) }.getOrNull()
@@ -306,6 +338,7 @@ class RootProcessMemoryReader(
                 val slot = module + rva
                 val value = runCatching { readPointer(slot) }.getOrNull()
                 lines += "InitBase candidate ${hex(rva)} [${hex(slot)}] -> ${value?.let(::hex) ?: "unreadable"}"
+                lines += describeInitBaseCandidate(module, rva)
             }
             // TypeInfo globals may be populated lazily by IL2CPP. Retry briefly,
             // but never fall back to an unverified RVA and interpret a zero slot
